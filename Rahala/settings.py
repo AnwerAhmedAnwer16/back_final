@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'channels',
+    'drf_yasg',
     'accounts.apps.AccountsConfig',
     'trip.apps.TripConfig',
     'interactions.apps.InteractionsConfig',
