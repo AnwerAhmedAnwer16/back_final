@@ -91,6 +91,7 @@ class RegisterView(generics.CreateAPIView):
                 'message': 'User created successfully. Please check your email for verification.',
                 'user': UserSerializer(user).data
             }, status=status.HTTP_201_CREATED)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 

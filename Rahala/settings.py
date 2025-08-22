@@ -215,6 +215,7 @@ PAYMOB_API_KEY = env('PAYMOB_API_KEY')
 PAYMOB_INTEGRATION_ID = env('PAYMOB_INTEGRATION_ID')
 PAYMOB_IFRAME_ID = env('PAYMOB_IFRAME_ID')
 PAYMOB_BASE_URL = env('PAYMOB_BASE_URL', default='https://accept.paymob.com/api')
+PAYMOB_HMAC_SECRET = env('PAYMOB_HMAC_SECRET')  # Add this for webhook verification
 
 # OpenRouter AI Configuration
 OPENROUTER_API_KEY = env('OPENROUTER_API_KEY')

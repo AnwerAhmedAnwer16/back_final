@@ -85,35 +85,68 @@ class UserPaymentHistoryView(generics.ListAPIView):
 class PayMobWebhookView(APIView):
     """استقبال إشعارات PayMob"""
     permission_classes = [permissions.AllowAny]
-    
+
     def post(self, request):
         try:
             webhook_data = request.data
             logger.info(f"PayMob webhook received: {webhook_data}")
-            
+
+            # Verify webhook signature first
+            signature = request.META.get('HTTP_X_PAYMOB_SIGNATURE', '')
+            if not signature:
+                # Try alternative header names
+                signature = request.META.get('HTTP_HMAC', '') or request.META.get('HTTP_SIGNATURE', '')
+
+            paymob_service = PayMobService()
+            if not paymob_service.verify_webhook_signature(webhook_data, signature):
+                logger.error("Webhook signature verification failed")
+                return Response({'error': 'Invalid signature'}, status=status.HTTP_401_UNAUTHORIZED)
+
             # استخراج معرف الطلب
             order_id = webhook_data.get('order', {}).get('id')
             transaction_id = webhook_data.get('id')
             success = webhook_data.get('success', False)
-            
+            transaction_status = webhook_data.get('status', '')
+
             if not order_id:
+                logger.error("Missing order ID in webhook")
                 return Response({'error': 'Missing order ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             # البحث عن الدفعة
             try:
                 payment = Payment.objects.get(paymob_order_id=str(order_id))
             except Payment.DoesNotExist:
                 logger.error(f"Payment not found for order ID: {order_id}")
                 return Response({'error': 'Payment not found'}, status=status.HTTP_404_NOT_FOUND)
-            
+
+            # Store webhook data for audit
+            from .models import PaymentTransaction
+            PaymentTransaction.objects.update_or_create(
+                payment=payment,
+                defaults={
+                    'webhook_data': webhook_data,
+                    'hmac_signature': signature
+                }
+            )
+
             # تحديث حالة الدفعة
-            if success:
-                paymob_service = PayMobService()
-                success_result = paymob_service.handle_successful_payment(
-                    payment_id=payment.id,
-                    transaction_data={'transaction_id': transaction_id}
-                )
-                
+            if success and transaction_status.lower() == 'success':
+                # تحديد نوع الدفع (اشتراك أم ترويج)
+                if payment.subscription_plan:
+                    # دفع اشتراك
+                    success_result = paymob_service.handle_successful_payment(
+                        payment_id=payment.id,
+                        transaction_data={'transaction_id': transaction_id}
+                    )
+                else:
+                    # دفع ترويج
+                    from promotions.services import PromotionPaymentService
+                    promotion_service = PromotionPaymentService()
+                    success_result = promotion_service.handle_successful_promotion_payment(
+                        payment_id=payment.id,
+                        transaction_data={'transaction_id': transaction_id}
+                    )
+
                 if success_result:
                     logger.info(f"Payment {payment.id} processed successfully")
                     return Response({'status': 'success'}, status=status.HTTP_200_OK)
@@ -121,12 +154,18 @@ class PayMobWebhookView(APIView):
                     logger.error(f"Failed to process payment {payment.id}")
                     return Response({'error': 'Failed to process payment'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
-                # فشل الدفع
-                payment.status = 'failed'
+                # فشل الدفع أو حالة أخرى
+                if transaction_status.lower() in ['failed', 'cancelled', 'declined']:
+                    payment.status = 'failed'
+                elif transaction_status.lower() == 'pending':
+                    payment.status = 'pending'
+                else:
+                    payment.status = 'failed'  # Default to failed for unknown statuses
+
                 payment.save()
-                logger.info(f"Payment {payment.id} marked as failed")
-                return Response({'status': 'failed'}, status=status.HTTP_200_OK)
-                
+                logger.info(f"Payment {payment.id} status updated to {payment.status}")
+                return Response({'status': payment.status}, status=status.HTTP_200_OK)
+
         except Exception as e:
             logger.error(f"Error processing PayMob webhook: {str(e)}")
             return Response({'error': 'Webhook processing failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -483,6 +483,7 @@ class SearchSuggestionsView(APIView):
                         'text': user.username,
                         'display_text': display_name,
                         'type': 'user',
+                        'user_id': user.id,
                         'popularity': user.followers_count
                     })
 
@@ -517,6 +518,7 @@ class SearchSuggestionsView(APIView):
                         'text': user.username,
                         'display_text': display_name,
                         'type': 'user',
+                        'user_id': user.id,
                         'popularity': user.followers_count
                     })
 
@@ -651,105 +653,4 @@ class PopularSearchesView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class QuickSearchView(APIView):
-    """البحث السريع للكتابة المباشرة (Type as you type)"""
-    permission_classes = [AllowAny]
 
-    def get(self, request):
-        try:
-            query = request.query_params.get('q', '').strip()
-
-            # للبحث السريع، نقبل حرف واحد على الأقل
-            if not query:
-                return Response({
-                    'query': '',
-                    'suggestions': [],
-                    'quick_results': []
-                })
-
-            if len(query) > 50:  # حد أقل للبحث السريع
-                return Response({
-                    'error': 'كلمة البحث طويلة جداً',
-                    'error_code': 'QUERY_TOO_LONG'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # نتائج سريعة محدودة (5 من كل نوع)
-            users = User.objects.select_related('profile').filter(
-                Q(username__istartswith=query) |  # istartswith أسرع من icontains
-                Q(profile__first_name__istartswith=query) |
-                Q(profile__last_name__istartswith=query)
-            ).annotate(
-                followers_count=Count('followers')
-            ).order_by('-followers_count')[:5]
-
-            tags = TripTag.objects.filter(
-                tripTag__istartswith=query
-            ).values('tripTag').annotate(
-                trips_count=Count('id')
-            ).order_by('-trips_count')[:5]
-
-            # تحضير النتائج السريعة
-            quick_results = []
-
-            # إضافة المستخدمين
-            for user in users:
-                user_data = {
-                    'type': 'user',
-                    'id': user.id,
-                    'username': user.username,
-                    'display_name': user.username,
-                    'avatar': None,
-                    'followers_count': user.followers_count
-                }
-
-                # إضافة الاسم الكامل كـ display_name
-                if hasattr(user, 'profile') and user.profile:
-                    if user.profile.first_name or user.profile.last_name:
-                        user_data['display_name'] = f"{user.profile.first_name} {user.profile.last_name}".strip()
-
-                    if user.profile.avatar:
-                        user_data['avatar'] = request.build_absolute_uri(user.profile.avatar.url)
-
-                quick_results.append(user_data)
-
-            # إضافة التاجز
-            for tag in tags:
-                tag_data = {
-                    'type': 'tag',
-                    'name': tag['tripTag'],
-                    'display_name': f"#{tag['tripTag']}",
-                    'trips_count': tag['trips_count']
-                }
-                quick_results.append(tag_data)
-
-            # اقتراحات بسيطة (أشهر النتائج)
-            suggestions = []
-
-            # اقتراحات من المستخدمين
-            for user in users[:3]:
-                suggestions.append({
-                    'text': user.username,
-                    'type': 'user'
-                })
-
-            # اقتراحات من التاجز
-            for tag in tags[:3]:
-                suggestions.append({
-                    'text': tag['tripTag'],
-                    'type': 'tag'
-                })
-
-            return Response({
-                'query': query,
-                'suggestions': suggestions,
-                'quick_results': quick_results,
-                'total_results': len(quick_results),
-                'has_more': len(users) == 5 or len(tags) == 5  # إشارة لوجود نتائج أكثر
-            })
-
-        except Exception as e:
-            logger.error(f"Quick search error: {str(e)}")
-            return Response({
-                'error': 'حدث خطأ أثناء البحث السريع',
-                'error_code': 'QUICK_SEARCH_ERROR'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

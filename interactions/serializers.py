@@ -99,7 +99,8 @@ class NotificationSerializer(serializers.ModelSerializer):
     def get_trip_title(self, obj):
         """الحصول على عنوان الرحلة"""
         if obj.trip:
-            return obj.trip.title
+            # استخدام caption أو location كعنوان للرحلة
+            return obj.trip.caption or f"رحلة في {obj.trip.location}"
         return None
 
     def get_trip_image(self, obj):

@@ -37,9 +37,9 @@ class PromotionPaymentService:
             # إعداد بيانات المستخدم
             user_data = {
                 'email': user.email,
-                'first_name': getattr(user.profile, 'first_name', ''),
-                'last_name': getattr(user.profile, 'last_name', ''),
-                'phone': ''
+                'first_name': getattr(user.profile, 'first_name', '') or 'User',
+                'last_name': getattr(user.profile, 'last_name', '') or 'Name',
+                'phone': '+201234567890'  # Default phone number for PayMob
             }
             
             # إنشاء payment key

@@ -114,9 +114,105 @@ class PayMobService:
     
     def verify_webhook_signature(self, data, signature):
         """التحقق من صحة webhook signature"""
-        # PayMob webhook verification logic
-        # يجب تنفيذ هذا حسب documentation الخاص بـ PayMob
-        return True  # مؤقتاً
+        try:
+            # PayMob HMAC verification
+            # The HMAC key should be stored in settings
+            hmac_secret = getattr(settings, 'PAYMOB_HMAC_SECRET', '')
+
+            if not hmac_secret:
+                logger.error("PAYMOB_HMAC_SECRET not configured")
+                return False
+
+            # Create the string to be hashed according to PayMob documentation
+            # Format: amount_cents.currency.delivery_needed.email.first_name.id.integration_id.last_name.order.phone_number
+            webhook_data = data
+
+            # Extract required fields for HMAC calculation
+            amount_cents = str(webhook_data.get('amount_cents', ''))
+            currency = webhook_data.get('currency', '')
+            delivery_needed = str(webhook_data.get('delivery_needed', 'false')).lower()
+            email = webhook_data.get('email', '')
+            first_name = webhook_data.get('first_name', '')
+            transaction_id = str(webhook_data.get('id', ''))
+            integration_id = str(webhook_data.get('integration_id', ''))
+            last_name = webhook_data.get('last_name', '')
+            order_id = str(webhook_data.get('order', {}).get('id', ''))
+            phone_number = webhook_data.get('phone_number', '')
+
+            # Construct the string according to PayMob specification
+            concatenated_string = f"{amount_cents}.{currency}.{delivery_needed}.{email}.{first_name}.{transaction_id}.{integration_id}.{last_name}.{order_id}.{phone_number}"
+
+            # Calculate HMAC
+            calculated_hmac = hmac.new(
+                hmac_secret.encode('utf-8'),
+                concatenated_string.encode('utf-8'),
+                hashlib.sha512
+            ).hexdigest()
+
+            # Compare signatures
+            is_valid = hmac.compare_digest(calculated_hmac, signature)
+
+            if not is_valid:
+                logger.error(f"HMAC verification failed. Expected: {calculated_hmac}, Received: {signature}")
+                logger.error(f"Concatenated string: {concatenated_string}")
+
+            return is_valid
+
+        except Exception as e:
+            logger.error(f"Error verifying webhook signature: {str(e)}")
+            return False
+
+    def inquiry_transaction(self, transaction_id):
+        """استعلام عن حالة المعاملة من PayMob"""
+        try:
+            if not self.auth_token:
+                self.authenticate()
+
+            url = f"{self.base_url}/acceptance/transactions/{transaction_id}"
+            headers = {
+                'Authorization': f'Bearer {self.auth_token}',
+                'Content-Type': 'application/json'
+            }
+
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+
+            result = response.json()
+            logger.info(f"Transaction inquiry successful for ID: {transaction_id}")
+            return result
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Transaction inquiry failed: {str(e)}")
+            return None
+
+    def verify_payment_with_paymob(self, payment_id):
+        """التحقق من حالة الدفع مع PayMob API"""
+        try:
+            payment = Payment.objects.get(id=payment_id)
+
+            if not payment.paymob_transaction_id:
+                logger.error(f"No PayMob transaction ID for payment {payment_id}")
+                return False
+
+            transaction_data = self.inquiry_transaction(payment.paymob_transaction_id)
+
+            if not transaction_data:
+                return False
+
+            # Check if transaction is successful
+            is_success = transaction_data.get('success', False)
+            transaction_status = transaction_data.get('status', '')
+
+            logger.info(f"PayMob verification - Payment {payment_id}: success={is_success}, status={transaction_status}")
+
+            return is_success and transaction_status.lower() == 'success'
+
+        except Payment.DoesNotExist:
+            logger.error(f"Payment {payment_id} not found")
+            return False
+        except Exception as e:
+            logger.error(f"Error verifying payment with PayMob: {str(e)}")
+            return False
     
     def process_subscription_payment(self, user, subscription_plan):
         """معالجة دفع الاشتراك"""
@@ -141,9 +237,9 @@ class PayMobService:
             # إعداد بيانات المستخدم
             user_data = {
                 'email': user.email,
-                'first_name': getattr(user.profile, 'first_name', ''),
-                'last_name': getattr(user.profile, 'last_name', ''),
-                'phone': ''  # يمكن إضافة حقل الهاتف لاحقاً
+                'first_name': getattr(user.profile, 'first_name', '') or 'User',
+                'last_name': getattr(user.profile, 'last_name', '') or 'Name',
+                'phone': '+201234567890'  # Default phone number for PayMob
             }
             
             # إنشاء payment key
@@ -243,7 +339,27 @@ class SubscriptionService:
             logger.info(f"Subscription expired for user {user.username}")
         
         return expired_users.count()
-    
+
+    @staticmethod
+    def reconcile_payments():
+        """مطابقة المدفوعات مع PayMob"""
+        paymob_service = PayMobService()
+        pending_payments = Payment.objects.filter(status='pending')
+
+        reconciled_count = 0
+        for payment in pending_payments:
+            if payment.paymob_transaction_id:
+                is_verified = paymob_service.verify_payment_with_paymob(payment.id)
+                if is_verified:
+                    paymob_service.handle_successful_payment(
+                        payment_id=payment.id,
+                        transaction_data={'transaction_id': payment.paymob_transaction_id}
+                    )
+                    reconciled_count += 1
+                    logger.info(f"Payment {payment.id} reconciled successfully")
+
+        return reconciled_count
+
     @staticmethod
     def get_user_subscription_status(user):
         """الحصول على حالة اشتراك المستخدم"""

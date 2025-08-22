@@ -139,7 +139,7 @@ class Profile(models.Model):
     bio = models.TextField('bio', blank = True)
     avatar = models.ImageField('avatar',  upload_to= avatar_upload_path, blank = True)
     country = models.CharField('country', max_length = 20 , blank = True)
-    gender = models.CharField('gender', max_length = 20, choices = [('M','male'),('F','female')])
+    gender = models.CharField('gender', max_length = 20, choices = [('M','male'),('F','female')], blank=True)
 
     class Meta:
         indexes = [
@@ -197,7 +197,7 @@ class Payment(models.Model):
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
-    subscription_plan = models.ForeignKey(SubscriptionPlan, on_delete=models.CASCADE)
+    subscription_plan = models.ForeignKey(SubscriptionPlan, on_delete=models.CASCADE, null=True, blank=True)
     amount = models.DecimalField('amount', max_digits=10, decimal_places=2)
     currency = models.CharField('currency', max_length=3, default='EGP')
     status = models.CharField('status', max_length=20, choices=STATUS_CHOICES, default='pending')
